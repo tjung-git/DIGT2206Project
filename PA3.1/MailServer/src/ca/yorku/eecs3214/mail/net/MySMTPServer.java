@@ -153,9 +153,12 @@ public class MySMTPServer extends Thread {
             return;
         }
         
-        if (addr.startsWith("<") && addr.endsWith(">")) {
-            addr = addr.substring(1, addr.length() - 1);
+        if (!addr.startsWith("<") || !addr.endsWith(">")) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
         }
+        
+        addr = addr.substring(1, addr.length() - 1);
         
         sender = addr;
         recipientList = new ArrayList<>();
@@ -196,9 +199,12 @@ public class MySMTPServer extends Thread {
             return;
         }
         
-        if (addr.startsWith("<") && addr.endsWith(">")) {
-            addr = addr.substring(1, addr.length() - 1);
+        if (!addr.startsWith("<") || !addr.endsWith(">")) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
         }
+        
+        addr = addr.substring(1, addr.length() - 1);
         
         if (!Mailbox.isValidUser(addr)) {
             socketOut.println("550 Requested action not taken: mailbox unavailable");
