@@ -135,14 +135,14 @@ public class MySMTPServer extends Thread {
             return;
         }
         
-        String upper = arg.toUpperCase();
-        if (!upper.startsWith("FROM:") && !upper.startsWith("FROM :")) {
+        int colonPos = arg.indexOf(':');
+        if (colonPos == -1) {
             socketOut.println("501 Syntax error in parameters or arguments");
             return;
         }
         
-        int colonPos = arg.indexOf(':');
-        if (colonPos == -1) {
+        String keyword = arg.substring(0, colonPos).trim().toUpperCase();
+        if (!keyword.equals("FROM")) {
             socketOut.println("501 Syntax error in parameters or arguments");
             return;
         }
@@ -178,14 +178,14 @@ public class MySMTPServer extends Thread {
             return;
         }
         
-        String upper = arg.toUpperCase();
-        if (!upper.startsWith("TO:") && !upper.startsWith("TO :")) {
+        int colonPos = arg.indexOf(':');
+        if (colonPos == -1) {
             socketOut.println("501 Syntax error in parameters or arguments");
             return;
         }
         
-        int colonPos = arg.indexOf(':');
-        if (colonPos == -1) {
+        String keyword = arg.substring(0, colonPos).trim().toUpperCase();
+        if (!keyword.equals("TO")) {
             socketOut.println("501 Syntax error in parameters or arguments");
             return;
         }
