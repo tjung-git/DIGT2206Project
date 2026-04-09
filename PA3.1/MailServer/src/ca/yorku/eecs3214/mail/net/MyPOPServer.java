@@ -203,11 +203,7 @@ public class MyPOPServer extends Thread {
             try (BufferedReader reader = new BufferedReader(new FileReader(msg.getFile()))) {
                 String line;
                 while ((line = reader.readLine()) != null) {
-                    if (line.startsWith(".")) {
-                        socketOut.println("." + line);
-                    } else {
-                        socketOut.println(line);
-                    }
+                    socketOut.println(line);
                 }
             }
             socketOut.println(".");
