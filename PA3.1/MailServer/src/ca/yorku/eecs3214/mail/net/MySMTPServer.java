@@ -17,7 +17,9 @@ public class MySMTPServer extends Thread {
     private final BufferedReader socketIn;
     private final PrintWriter socketOut;
 
-    // TODO Additional properties, if needed
+    private boolean greeted = false;
+    private String sender = null;
+    private List<Mailbox> recipientList = null;
 
     /**
      * Initializes an object responsible for a connection to an individual client.
@@ -40,13 +42,232 @@ public class MySMTPServer extends Thread {
     @Override
     public void run() {
         try (this.socket) {
-
-            // TODO Complete this method
-
+            socketOut.println("220 " + getHostName() + " SMTP Service Ready");
+            
+            String line;
+            while ((line = socketIn.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                processCommand(line.trim());
+            }
+            
         } catch (IOException e) {
             System.err.println("Error in client's connection handling.");
             e.printStackTrace();
         }
+    }
+    
+    private void processCommand(String line) throws IOException {
+        String[] parts = line.split("\\s+", 2);
+        String cmd = parts[0].toUpperCase();
+        String arg = parts.length > 1 ? parts[1] : "";
+        
+        switch (cmd) {
+            case "HELO":
+                handleHelo(arg);
+                break;
+            case "EHLO":
+                handleEhlo(arg);
+                break;
+            case "MAIL":
+                handleMail(arg);
+                break;
+            case "RCPT":
+                handleRcpt(arg);
+                break;
+            case "DATA":
+                handleData();
+                break;
+            case "RSET":
+                handleRset();
+                break;
+            case "VRFY":
+                handleVrfy(arg);
+                break;
+            case "NOOP":
+                handleNoop();
+                break;
+            case "QUIT":
+                handleQuit();
+                break;
+            case "EXPN":
+            case "HELP":
+                socketOut.println("502 Command not implemented");
+                break;
+            default:
+                socketOut.println("500 Syntax error, command unrecognized");
+                break;
+        }
+    }
+    
+    private void handleHelo(String arg) {
+        if (arg.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        greeted = true;
+        socketOut.println("250 " + getHostName());
+    }
+    
+    private void handleEhlo(String arg) {
+        if (arg.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        greeted = true;
+        socketOut.println("250 " + getHostName());
+    }
+    
+    private void handleMail(String arg) {
+        if (!greeted) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        if (sender != null) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        if (arg.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        String upper = arg.toUpperCase();
+        if (!upper.startsWith("FROM:")) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        String addr = arg.substring(5).trim();
+        if (addr.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        if (addr.startsWith("<") && addr.endsWith(">")) {
+            addr = addr.substring(1, addr.length() - 1);
+        }
+        
+        sender = addr;
+        recipientList = new ArrayList<>();
+        socketOut.println("250 OK");
+    }
+    
+    private void handleRcpt(String arg) {
+        if (!greeted) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        if (sender == null) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        if (arg.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        String upper = arg.toUpperCase();
+        if (!upper.startsWith("TO:")) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        String addr = arg.substring(3).trim();
+        if (addr.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        if (addr.startsWith("<") && addr.endsWith(">")) {
+            addr = addr.substring(1, addr.length() - 1);
+        }
+        
+        if (!Mailbox.isValidUser(addr)) {
+            socketOut.println("550 Requested action not taken: mailbox unavailable");
+            return;
+        }
+        
+        try {
+            recipientList.add(new Mailbox(addr));
+            socketOut.println("250 OK");
+        } catch (Mailbox.InvalidUserException e) {
+            socketOut.println("550 Requested action not taken: mailbox unavailable");
+        }
+    }
+    
+    private void handleData() throws IOException {
+        if (!greeted) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        if (sender == null) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        if (recipientList == null || recipientList.isEmpty()) {
+            socketOut.println("503 Bad sequence of commands");
+            return;
+        }
+        
+        socketOut.println("354 Start mail input; end with <CRLF>.<CRLF>");
+        
+        try (MailWriter writer = new MailWriter(recipientList)) {
+            String line;
+            while ((line = socketIn.readLine()) != null) {
+                if (line.equals(".")) {
+                    break;
+                }
+                if (line.startsWith("..")) {
+                    line = line.substring(1);
+                }
+                writer.write(line + "\r\n");
+            }
+        }
+        
+        socketOut.println("250 OK");
+        sender = null;
+        recipientList = null;
+    }
+    
+    private void handleRset() {
+        sender = null;
+        recipientList = null;
+        socketOut.println("250 OK");
+    }
+    
+    private void handleVrfy(String arg) {
+        if (arg.isEmpty()) {
+            socketOut.println("501 Syntax error in parameters or arguments");
+            return;
+        }
+        
+        String addr = arg.trim();
+        if (addr.startsWith("<") && addr.endsWith(">")) {
+            addr = addr.substring(1, addr.length() - 1);
+        }
+        
+        if (Mailbox.isValidUser(addr)) {
+            socketOut.println("250 " + addr);
+        } else {
+            socketOut.println("550 Requested action not taken: mailbox unavailable");
+        }
+    }
+    
+    private void handleNoop() {
+        socketOut.println("250 OK");
+    }
+    
+    private void handleQuit() throws IOException {
+        socketOut.println("221 " + getHostName() + " Service closing transmission channel");
+        socket.close();
     }
 
     /**
