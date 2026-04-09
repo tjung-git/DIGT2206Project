@@ -10,8 +10,8 @@ package ca.yorku.rtsp.client.model;
 import ca.yorku.rtsp.client.exception.RTSPException;
 import ca.yorku.rtsp.client.net.RTSPConnection;
 
-import java.util.HashSet;
-import java.util.Set;
+import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * This class manages an open session with an RTSP server. It provides the main interaction between the network
@@ -22,6 +22,13 @@ public class Session {
     private Set<SessionListener> sessionListeners = new HashSet<SessionListener>();
     private RTSPConnection rtspConnection;
     private String videoName = null;
+    
+    private TreeSet<Frame> buf;
+    private ScheduledExecutorService exec;
+    private ScheduledFuture<?> task;
+    private boolean playing;
+    private boolean ended;
+    private short next;
 
     /**
      * Creates a new RTSP session. This constructor will also create a new network connection with the server. No stream
@@ -34,6 +41,11 @@ public class Session {
     public Session(String server, int port) throws RTSPException {
 
         rtspConnection = new RTSPConnection(this, server, port);
+        buf = new TreeSet<>();
+        exec = Executors.newScheduledThreadPool(1);
+        playing = false;
+        ended = false;
+        next = 0;
     }
 
     /**
@@ -63,10 +75,18 @@ public class Session {
      */
     public synchronized void open(String videoName) {
         try {
+            buf.clear();
+            next = 0;
+            playing = false;
+            ended = false;
+            stop();
+            
             rtspConnection.setup(videoName);
             this.videoName = videoName;
             for (SessionListener listener : sessionListeners)
                 listener.videoNameChanged(this.videoName);
+            
+            rtspConnection.play();
         } catch (RTSPException e) {
             listenerException(e);
         }
@@ -80,10 +100,13 @@ public class Session {
      * stopped.
      */
     public synchronized void play() {
-        try {
-            rtspConnection.play();
-        } catch (RTSPException e) {
-            listenerException(e);
+        playing = true;
+        
+        if (ended && !buf.isEmpty()) {
+            start();
+        } else if (buf.size() >= 50) {
+            start();
+        } else if (buf.size() >= 1 && buf.size() < 50 && task != null) {
         }
     }
 
@@ -93,11 +116,8 @@ public class Session {
      * the playback completely.
      */
     public synchronized void pause() {
-        try {
-            rtspConnection.pause();
-        } catch (RTSPException e) {
-            listenerException(e);
-        }
+        playing = false;
+        stop();
     }
 
     /**
@@ -105,7 +125,12 @@ public class Session {
      */
     public synchronized void close() {
         try {
+            stop();
             rtspConnection.teardown();
+            buf.clear();
+            next = 0;
+            playing = false;
+            ended = false;
             processReceivedFrame(null);
             videoName = null;
             for (SessionListener listener : sessionListeners)
@@ -124,6 +149,8 @@ public class Session {
      * Closes the connection with the current server. This session element should not be used anymore after this point.
      */
     public synchronized void closeConnection() {
+        stop();
+        exec.shutdown();
         rtspConnection.closeConnection();
     }
 
@@ -136,8 +163,30 @@ public class Session {
      */
     public synchronized void processReceivedFrame(Frame frame) {
         if (videoName == null) return;
-        for (SessionListener listener : sessionListeners)
-            listener.frameReceived(frame);
+        
+        if (frame == null) {
+            for (SessionListener listener : sessionListeners)
+                listener.frameReceived(null);
+            return;
+        }
+        
+        if (frame.getSequenceNumber() < next) {
+            return;
+        }
+        
+        buf.add(frame);
+        
+        if (buf.size() >= 100) {
+            try {
+                rtspConnection.pause();
+            } catch (RTSPException e) {
+                listenerException(e);
+            }
+        }
+        
+        if (playing && task == null && buf.size() >= 50) {
+            start();
+        }
     }
 
     /**
@@ -150,8 +199,11 @@ public class Session {
      * used to identify a missing frame at the end of the stream.
      */
     public synchronized void videoEnded(int sequenceNumber) {
-        for (SessionListener listener : sessionListeners)
-            listener.videoEnded();
+        ended = true;
+        
+        if (playing && task == null && !buf.isEmpty()) {
+            start();
+        }
     }
 
     /**
@@ -161,5 +213,50 @@ public class Session {
      */
     public synchronized String getVideoName() {
         return videoName;
+    }
+    
+    private synchronized void start() {
+        if (task != null) return;
+        
+        task = exec.scheduleAtFixedRate(() -> {
+            synchronized (Session.this) {
+                if (!playing || buf.isEmpty()) {
+                    stop();
+                    return;
+                }
+                
+                Frame f = buf.first();
+                
+                if (f.getSequenceNumber() == next) {
+                    buf.remove(f);
+                    next++;
+                    
+                    for (SessionListener listener : sessionListeners) {
+                        listener.frameReceived(f);
+                    }
+                } else if (f.getSequenceNumber() > next) {
+                    next++;
+                }
+                
+                if (buf.size() < 80 && !ended) {
+                    try {
+                        rtspConnection.play();
+                    } catch (RTSPException e) {
+                        listenerException(e);
+                    }
+                }
+                
+                if (buf.isEmpty() && !ended) {
+                    stop();
+                }
+            }
+        }, 0, 40, TimeUnit.MILLISECONDS);
+    }
+    
+    private synchronized void stop() {
+        if (task != null) {
+            task.cancel(false);
+            task = null;
+        }
     }
 }
