@@ -102,11 +102,8 @@ public class Session {
     public synchronized void play() {
         playing = true;
         
-        if (ended && !buf.isEmpty()) {
+        if (buf.size() >= 50 || (ended && !buf.isEmpty())) {
             start();
-        } else if (buf.size() >= 50) {
-            start();
-        } else if (buf.size() >= 1 && buf.size() < 50 && task != null) {
         }
     }
 
@@ -131,7 +128,6 @@ public class Session {
             next = 0;
             playing = false;
             ended = false;
-            processReceivedFrame(null);
             videoName = null;
             for (SessionListener listener : sessionListeners)
                 listener.videoNameChanged(this.videoName);
@@ -165,8 +161,6 @@ public class Session {
         if (videoName == null) return;
         
         if (frame == null) {
-            for (SessionListener listener : sessionListeners)
-                listener.frameReceived(null);
             return;
         }
         
@@ -204,6 +198,11 @@ public class Session {
         if (playing && task == null && !buf.isEmpty()) {
             start();
         }
+        
+        if (playing && task != null && buf.isEmpty()) {
+            for (SessionListener listener : sessionListeners)
+                listener.videoEnded();
+        }
     }
 
     /**
@@ -221,7 +220,13 @@ public class Session {
         task = exec.scheduleAtFixedRate(() -> {
             synchronized (Session.this) {
                 if (!playing || buf.isEmpty()) {
-                    stop();
+                    if (buf.isEmpty() && !ended) {
+                        stop();
+                    } else if (buf.isEmpty() && ended) {
+                        stop();
+                        for (SessionListener listener : sessionListeners)
+                            listener.videoEnded();
+                    }
                     return;
                 }
                 
@@ -244,10 +249,6 @@ public class Session {
                     } catch (RTSPException e) {
                         listenerException(e);
                     }
-                }
-                
-                if (buf.isEmpty() && !ended) {
-                    stop();
                 }
             }
         }, 0, 40, TimeUnit.MILLISECONDS);
