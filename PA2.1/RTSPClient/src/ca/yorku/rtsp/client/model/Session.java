@@ -265,7 +265,7 @@ public class Session {
                     }
                 }
             }
-        }, 0, 40, TimeUnit.MILLISECONDS);
+        }, 40, 40, TimeUnit.MILLISECONDS);
     }
     
     private synchronized void stop() {
