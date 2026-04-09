@@ -13,7 +13,9 @@ public class MyPOPServer extends Thread {
     private final BufferedReader socketIn;
     private final PrintWriter socketOut;
 
-    // TODO Additional properties, if needed
+    private String username = null;
+    private Mailbox mailbox = null;
+    private boolean authenticated = false;
 
     /**
      * Initializes an object responsible for a connection to an individual client.
@@ -38,16 +40,245 @@ public class MyPOPServer extends Thread {
      */
     @Override
     public void run() {
-        // Use a try-with-resources block to ensure that the socket is closed
-        // when the method returns
         try (this.socket) {
-
-            // TODO Complete this method
-
+            socketOut.println("+OK POP3 server ready");
+            
+            String line;
+            while ((line = socketIn.readLine()) != null) {
+                if (line.trim().isEmpty()) {
+                    continue;
+                }
+                processCommand(line.trim());
+            }
+            
         } catch (IOException e) {
             System.err.println("Error in client's connection handling.");
             e.printStackTrace();
         }
+    }
+    
+    private void processCommand(String line) throws IOException {
+        String[] parts = line.split("\\s+", 2);
+        String cmd = parts[0].toUpperCase();
+        String arg = parts.length > 1 ? parts[1] : "";
+        
+        switch (cmd) {
+            case "USER":
+                handleUser(arg);
+                break;
+            case "PASS":
+                handlePass(arg);
+                break;
+            case "STAT":
+                handleStat();
+                break;
+            case "LIST":
+                handleList(arg);
+                break;
+            case "RETR":
+                handleRetr(arg);
+                break;
+            case "DELE":
+                handleDele(arg);
+                break;
+            case "RSET":
+                handleRset();
+                break;
+            case "NOOP":
+                handleNoop();
+                break;
+            case "QUIT":
+                handleQuit();
+                break;
+            default:
+                socketOut.println("-ERR Unknown command");
+                break;
+        }
+    }
+    
+    private void handleUser(String arg) {
+        if (arg.isEmpty()) {
+            socketOut.println("-ERR Missing username");
+            return;
+        }
+        username = arg;
+        socketOut.println("+OK User accepted");
+    }
+    
+    private void handlePass(String arg) {
+        if (username == null) {
+            socketOut.println("-ERR No username given");
+            return;
+        }
+        
+        if (arg.isEmpty()) {
+            socketOut.println("-ERR Missing password");
+            return;
+        }
+        
+        try {
+            mailbox = new Mailbox(username);
+            mailbox.loadMessages(arg);
+            authenticated = true;
+            socketOut.println("+OK Mailbox open, " + mailbox.size(true) + " messages");
+        } catch (Mailbox.InvalidUserException e) {
+            socketOut.println("-ERR Invalid user or password");
+            username = null;
+        } catch (Mailbox.MailboxNotAuthenticatedException e) {
+            socketOut.println("-ERR Invalid user or password");
+            username = null;
+        }
+    }
+    
+    private void handleStat() {
+        if (!authenticated) {
+            socketOut.println("-ERR Not authenticated");
+            return;
+        }
+        
+        int count = mailbox.size(false);
+        long size = mailbox.getTotalUndeletedFileSize(false);
+        socketOut.println("+OK " + count + " " + size);
+    }
+    
+    private void handleList(String arg) {
+        if (!authenticated) {
+            socketOut.println("-ERR Not authenticated");
+            return;
+        }
+        
+        if (arg.isEmpty()) {
+            int count = mailbox.size(false);
+            long size = mailbox.getTotalUndeletedFileSize(false);
+            socketOut.println("+OK " + count + " messages (" + size + " octets)");
+            
+            int index = 1;
+            for (MailMessage msg : mailbox) {
+                if (!msg.isDeleted()) {
+                    socketOut.println(index + " " + msg.getFileSize());
+                }
+                index++;
+            }
+            socketOut.println(".");
+        } else {
+            try {
+                int msgNum = Integer.parseInt(arg);
+                MailMessage msg = mailbox.getMailMessage(msgNum);
+                
+                if (msg.isDeleted()) {
+                    socketOut.println("-ERR Message " + msgNum + " already deleted");
+                } else {
+                    socketOut.println("+OK " + msgNum + " " + msg.getFileSize());
+                }
+            } catch (NumberFormatException e) {
+                socketOut.println("-ERR Invalid message number");
+            } catch (IndexOutOfBoundsException e) {
+                socketOut.println("-ERR No such message");
+            }
+        }
+    }
+    
+    private void handleRetr(String arg) {
+        if (!authenticated) {
+            socketOut.println("-ERR Not authenticated");
+            return;
+        }
+        
+        if (arg.isEmpty()) {
+            socketOut.println("-ERR Missing message number");
+            return;
+        }
+        
+        try {
+            int msgNum = Integer.parseInt(arg);
+            MailMessage msg = mailbox.getMailMessage(msgNum);
+            
+            if (msg.isDeleted()) {
+                socketOut.println("-ERR Message " + msgNum + " already deleted");
+                return;
+            }
+            
+            socketOut.println("+OK " + msg.getFileSize() + " octets");
+            
+            try (BufferedReader reader = new BufferedReader(new FileReader(msg.getFile()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+                    if (line.startsWith(".")) {
+                        socketOut.println("." + line);
+                    } else {
+                        socketOut.println(line);
+                    }
+                }
+            }
+            socketOut.println(".");
+            
+        } catch (NumberFormatException e) {
+            socketOut.println("-ERR Invalid message number");
+        } catch (IndexOutOfBoundsException e) {
+            socketOut.println("-ERR No such message");
+        } catch (IOException e) {
+            socketOut.println("-ERR Error reading message");
+        }
+    }
+    
+    private void handleDele(String arg) {
+        if (!authenticated) {
+            socketOut.println("-ERR Not authenticated");
+            return;
+        }
+        
+        if (arg.isEmpty()) {
+            socketOut.println("-ERR Missing message number");
+            return;
+        }
+        
+        try {
+            int msgNum = Integer.parseInt(arg);
+            MailMessage msg = mailbox.getMailMessage(msgNum);
+            
+            if (msg.isDeleted()) {
+                socketOut.println("-ERR Message " + msgNum + " already deleted");
+            } else {
+                msg.tagForDeletion();
+                socketOut.println("+OK Message " + msgNum + " deleted");
+            }
+        } catch (NumberFormatException e) {
+            socketOut.println("-ERR Invalid message number");
+        } catch (IndexOutOfBoundsException e) {
+            socketOut.println("-ERR No such message");
+        }
+    }
+    
+    private void handleRset() {
+        if (!authenticated) {
+            socketOut.println("-ERR Not authenticated");
+            return;
+        }
+        
+        for (MailMessage msg : mailbox) {
+            msg.undelete();
+        }
+        
+        int count = mailbox.size(false);
+        socketOut.println("+OK " + count + " messages");
+    }
+    
+    private void handleNoop() {
+        if (!authenticated) {
+            socketOut.println("-ERR Not authenticated");
+            return;
+        }
+        socketOut.println("+OK");
+    }
+    
+    private void handleQuit() throws IOException {
+        if (authenticated) {
+            mailbox.deleteMessagesTaggedForDeletion();
+            socketOut.println("+OK POP3 server signing off");
+        } else {
+            socketOut.println("+OK POP3 server signing off");
+        }
+        socket.close();
     }
 
     /**
