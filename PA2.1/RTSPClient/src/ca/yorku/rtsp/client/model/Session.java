@@ -29,6 +29,7 @@ public class Session {
     private boolean playing;
     private boolean ended;
     private short next;
+    private boolean connPlaying;
 
     /**
      * Creates a new RTSP session. This constructor will also create a new network connection with the server. No stream
@@ -46,6 +47,7 @@ public class Session {
         playing = false;
         ended = false;
         next = 0;
+        connPlaying = false;
     }
 
     /**
@@ -79,6 +81,7 @@ public class Session {
             next = 0;
             playing = false;
             ended = false;
+            connPlaying = false;
             stop();
             
             rtspConnection.setup(videoName);
@@ -87,6 +90,7 @@ public class Session {
                 listener.videoNameChanged(this.videoName);
             
             rtspConnection.play();
+            connPlaying = true;
         } catch (RTSPException e) {
             listenerException(e);
         }
@@ -101,6 +105,10 @@ public class Session {
      */
     public synchronized void play() {
         playing = true;
+        
+        if (task != null) {
+            return;
+        }
         
         if (buf.size() >= 50 || (ended && !buf.isEmpty())) {
             start();
@@ -128,6 +136,7 @@ public class Session {
             next = 0;
             playing = false;
             ended = false;
+            connPlaying = false;
             videoName = null;
             for (SessionListener listener : sessionListeners)
                 listener.videoNameChanged(this.videoName);
@@ -146,6 +155,9 @@ public class Session {
      */
     public synchronized void closeConnection() {
         stop();
+        videoName = null;
+        for (SessionListener listener : sessionListeners)
+            listener.videoNameChanged(this.videoName);
         exec.shutdown();
         rtspConnection.closeConnection();
     }
@@ -170,9 +182,10 @@ public class Session {
         
         buf.add(frame);
         
-        if (buf.size() >= 100) {
+        if (buf.size() >= 100 && connPlaying) {
             try {
                 rtspConnection.pause();
+                connPlaying = false;
             } catch (RTSPException e) {
                 listenerException(e);
             }
@@ -243,9 +256,10 @@ public class Session {
                     next++;
                 }
                 
-                if (buf.size() < 80 && !ended) {
+                if (buf.size() < 80 && !ended && !connPlaying) {
                     try {
                         rtspConnection.play();
+                        connPlaying = true;
                     } catch (RTSPException e) {
                         listenerException(e);
                     }
