@@ -110,7 +110,7 @@ public class Session {
             return;
         }
         
-        if (buf.size() >= 50 || (ended && !buf.isEmpty())) {
+        if (!buf.isEmpty()) {
             start();
         }
     }
